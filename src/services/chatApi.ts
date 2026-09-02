@@ -23,6 +23,7 @@ export interface ChatMessage {
   content: string;
   type: "text" | "image" | "file";
   isRead: boolean;
+  status?: "pending" | "sent" | "read";
   createdAt: string;
 }
 
@@ -87,10 +88,7 @@ export const getMessagesApi = async (conversationId: string) => {
   return response.data;
 };
 
-export const createMessageApi = async (
-  conversationId: string,
-  content: string,
-) => {
+export const createMessageApi = async (conversationId: string, content: string) => {
   const response = await api.post<{
     success: boolean;
     data: {

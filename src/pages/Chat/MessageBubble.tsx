@@ -1,5 +1,3 @@
-import { CheckOutlined, CheckCircleOutlined } from "@ant-design/icons";
-
 import type { ChatMessage } from "../../services/chatApi";
 
 interface MessageBubbleProps {
@@ -74,15 +72,11 @@ const MessageBubble = ({ message, isMine }: MessageBubbleProps) => {
 
           {isMine && (
             <>
-              {message.isRead ? (
-                <CheckCircleOutlined
-                  style={{
-                    color: "#1677ff",
-                  }}
-                />
-              ) : (
-                <CheckOutlined />
-              )}
+              {message.status === "pending" && <span>Đang gửi</span>}
+
+              {message.status === "sent" && <span>Đã gửi</span>}
+
+              {message.status === "read" && <span>Đã đọc</span>}
             </>
           )}
         </div>

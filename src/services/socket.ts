@@ -1,5 +1,5 @@
 import { io, Socket } from "socket.io-client";
-
+import { syncPendingMessages } from "./offlineSync";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:8080";
 
 let socket: Socket | null = null;
@@ -27,6 +27,8 @@ export const connectSocket = () => {
 
   socket.on("connect", () => {
     console.log("Socket connected:", socket?.id);
+
+    syncPendingMessages();
   });
 
   socket.on("disconnect", (reason) => {

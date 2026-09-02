@@ -1,4 +1,4 @@
-import { Button, Empty, Input, List, Modal, Spin } from "antd";
+import { Button, Empty, Input, List, message, Modal, Spin } from "antd";
 
 import { useCallback, useEffect, useState } from "react";
 
@@ -16,17 +16,24 @@ import { getSocket } from "../../services/socket";
 
 import { useAppSelector } from "../../hooks/redux";
 
+import { cacheMessages, getCachedMessages } from "../../database/messageCache";
+import { savePendingMessage } from "../../database/pendingMessages";
 import ChatHeader from "./ChatHeader";
 import MessageList from "./MessageList";
 import MessageInput from "./MessageInput";
+
+interface SocketResponse {
+  success: boolean;
+  message?: ChatMessage | string;
+  data?: any;
+}
 
 const Chat = () => {
   const { user } = useAppSelector((state) => state.auth);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
 
-  const [selectedConversation, setSelectedConversation] =
-    useState<Conversation | null>(null);
+  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
@@ -66,7 +73,6 @@ const Chat = () => {
       setSearching(false);
     }
   }, []);
-
   /**
    * Create conversation
    */
@@ -99,7 +105,6 @@ const Chat = () => {
       console.error("Create conversation error:", error);
     }
   };
-
   /**
    * Load conversations
    */
@@ -116,7 +121,6 @@ const Chat = () => {
       setLoading(false);
     }
   }, []);
-
   /**
    * Load messages
    */
@@ -133,7 +137,6 @@ const Chat = () => {
       setLoadingMessages(false);
     }
   }, []);
-
   /**
    * Select conversation
    */
@@ -167,31 +170,85 @@ const Chat = () => {
    * Find other user
    */
   const getOtherUser = (conversation: Conversation) => {
-    return conversation.participants.find(
-      (participant) => participant._id !== user?.id,
-    );
+    return conversation.participants.find((participant) => participant._id !== user?.id);
   };
   /**
    * Send message
    */
-  const handleSendMessage = (content: string) => {
+  const handleSendMessage = async (content: string) => {
     if (!selectedConversation) {
       return;
     }
 
     const socket = getSocket();
 
-    if (!socket || !socket.connected) {
-      console.error("Socket is not connected");
+    const clientMessageId = crypto.randomUUID();
 
+    const tempMessage: ChatMessage = {
+      _id: clientMessageId,
+      conversationId: selectedConversation._id,
+      senderId: user?.id || "",
+      content,
+      type: "text",
+      isRead: false,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, tempMessage]);
+
+    /**
+     * ==========================
+     * ONLINE
+     * ==========================
+     */
+    if (navigator.onLine && socket?.connected) {
+      socket.emit(
+        "send_message",
+        {
+          conversationId: selectedConversation._id,
+
+          content,
+
+          type: "text",
+
+          clientMessageId,
+        },
+
+        async (response: SocketResponse) => {
+          if (response?.success) {
+            const messageData = response.message;
+            if (messageData && typeof messageData !== "string" && messageData._id) {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg._id === clientMessageId ? { ...msg, _id: messageData._id, status: "sent" as const } : msg,
+                ),
+              );
+            }
+          } else {
+            setMessages((prev) => prev.filter((msg) => msg._id !== clientMessageId));
+            message.error("Failed to send message");
+          }
+        },
+      );
       return;
     }
 
-    socket.emit("send_message", {
+    /**
+     * ==========================
+     * OFFLINE
+     * ==========================
+     */
+
+    await savePendingMessage({
       conversationId: selectedConversation._id,
+
       content,
+
       type: "text",
     });
+
+    console.log("Message saved for sync");
   };
   /**
    * Read message
@@ -202,10 +259,7 @@ const Chat = () => {
         return;
       }
 
-      const senderId =
-        typeof message.senderId === "string"
-          ? message.senderId
-          : message.senderId._id;
+      const senderId = typeof message.senderId === "string" ? message.senderId : message.senderId._id;
 
       if (senderId === user.id || message.isRead) {
         return;
@@ -221,6 +275,7 @@ const Chat = () => {
     },
     [selectedConversation, user?.id],
   );
+
   /**
    * Initial conversations
    */
@@ -239,15 +294,31 @@ const Chat = () => {
      * New message
      */
     const handleNewMessage = ({ message }: { message: ChatMessage }) => {
+      const senderId = typeof message.senderId === "string" ? message.senderId : message.senderId._id;
+
       /**
        * Nếu message thuộc conversation
        * đang mở
        */
       if (message.conversationId === selectedConversation?._id) {
         setMessages((currentMessages) => {
-          const exists = currentMessages.some(
-            (item) => item._id === message._id,
-          );
+          /**
+           * Nếu tin nhắn của chính mình
+           * thì cập nhật status và _id
+           */
+          if (senderId === user?.id) {
+            return currentMessages.map((msg) =>
+              msg._id === message._id || (msg.status === "pending" && msg.content === message.content)
+                ? { ...message, status: "sent" as const }
+                : msg,
+            );
+          }
+
+          /**
+           * Nếu tin nhắn của người khác
+           * thì thêm mới nếu chưa tồn tại
+           */
+          const exists = currentMessages.some((item) => item._id === message._id);
 
           if (exists) {
             return currentMessages;
@@ -260,11 +331,6 @@ const Chat = () => {
          * Nếu tin nhắn của người khác
          * thì đánh dấu đã đọc
          */
-        const senderId =
-          typeof message.senderId === "string"
-            ? message.senderId
-            : message.senderId._id;
-
         if (senderId !== user?.id) {
           socket.emit("message_read", {
             conversationId: message.conversationId,
@@ -283,13 +349,7 @@ const Chat = () => {
     /**
      * User typing
      */
-    const handleUserTyping = ({
-      userId,
-      conversationId,
-    }: {
-      userId: string;
-      conversationId: string;
-    }) => {
+    const handleUserTyping = ({ userId, conversationId }: { userId: string; conversationId: string }) => {
       if (conversationId === selectedConversation?._id) {
         setTypingUserId(userId);
       }
@@ -298,17 +358,8 @@ const Chat = () => {
     /**
      * User stopped typing
      */
-    const handleUserStoppedTyping = ({
-      userId,
-      conversationId,
-    }: {
-      userId: string;
-      conversationId: string;
-    }) => {
-      if (
-        conversationId === selectedConversation?._id &&
-        userId === typingUserId
-      ) {
+    const handleUserStoppedTyping = ({ userId, conversationId }: { userId: string; conversationId: string }) => {
+      if (conversationId === selectedConversation?._id && userId === typingUserId) {
         setTypingUserId(null);
       }
     };
@@ -323,6 +374,7 @@ const Chat = () => {
             ? {
                 ...message,
                 isRead: true,
+                status: "read" as const,
               }
             : message,
         ),
@@ -347,7 +399,48 @@ const Chat = () => {
       socket.off("message_read", handleMessageRead);
     };
   }, [selectedConversation?._id, user?.id, typingUserId, loadConversations]);
+  // Load messages from API or cache
+  useEffect(() => {
+    const fetchMessages = async () => {
+      if (!selectedConversation) return;
 
+      const conversationId = selectedConversation._id;
+
+      // =========================
+      // ONLINE
+      // =========================
+      if (navigator.onLine) {
+        try {
+          const response = await getMessagesApi(conversationId);
+
+          const messages = response.data.messages;
+
+          // Hiển thị lên UI
+          setMessages(messages);
+
+          // Lưu messages vào IndexedDB
+          await cacheMessages(messages);
+
+          return;
+        } catch (error) {
+          console.warn("API failed, using cached messages:", error);
+        }
+      }
+
+      // =========================
+      // OFFLINE
+      // =========================
+      try {
+        const cachedMessages = await getCachedMessages(conversationId);
+
+        setMessages(cachedMessages);
+      } catch (error) {
+        console.error("Failed to load cached messages:", error);
+      }
+    };
+
+    fetchMessages();
+  }, [selectedConversation]);
   /**
    * Loading
    */
@@ -508,8 +601,7 @@ const Chat = () => {
                         whiteSpace: "nowrap",
                       }}
                     >
-                      {conversation.lastMessage?.content ||
-                        "Bắt đầu trò chuyện"}
+                      {conversation.lastMessage?.content || "Bắt đầu trò chuyện"}
                     </div>
                   </div>
                 </div>
@@ -544,10 +636,7 @@ const Chat = () => {
           </div>
         ) : (
           <>
-            <ChatHeader
-              user={getOtherUser(selectedConversation)}
-              isTyping={typingUserId !== null}
-            />
+            <ChatHeader user={getOtherUser(selectedConversation)} isTyping={typingUserId !== null} />
 
             {loadingMessages ? (
               <div
@@ -561,11 +650,7 @@ const Chat = () => {
                 <Spin />
               </div>
             ) : (
-              <MessageList
-                messages={messages}
-                currentUserId={user?.id}
-                onMessageVisible={handleMessageVisible}
-              />
+              <MessageList messages={messages} currentUserId={user?.id} onMessageVisible={handleMessageVisible} />
             )}
 
             {typingUserId && (
@@ -576,15 +661,11 @@ const Chat = () => {
                   fontSize: 12,
                 }}
               >
-                {getOtherUser(selectedConversation)?.username || "User"} đang
-                nhập...
+                {getOtherUser(selectedConversation)?.username || "User"} đang nhập...
               </div>
             )}
 
-            <MessageInput
-              conversationId={selectedConversation._id}
-              onSend={handleSendMessage}
-            />
+            <MessageInput conversationId={selectedConversation._id} onSend={handleSendMessage} />
           </>
         )}
       </div>
@@ -625,19 +706,12 @@ const Chat = () => {
             renderItem={(user) => (
               <List.Item
                 actions={[
-                  <Button
-                    type="primary"
-                    size="small"
-                    onClick={() => handleCreateConversation(user._id)}
-                  >
+                  <Button type="primary" size="small" onClick={() => handleCreateConversation(user._id)}>
                     Chat
                   </Button>,
                 ]}
               >
-                <List.Item.Meta
-                  title={user.username}
-                  description={user.email}
-                />
+                <List.Item.Meta title={user.username} description={user.email} />
               </List.Item>
             )}
           />

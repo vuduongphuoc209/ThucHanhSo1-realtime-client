@@ -1,19 +1,14 @@
 import { useEffect } from "react";
-
 import { useAppDispatch, useAppSelector } from "./hooks/redux";
-
 import { finishInitialization, getMe } from "./store/slices/authSlice";
-
 import { connectSocket, disconnectSocket } from "./services/socket";
-
+import ReloadPrompt from "./components/PWA/ReloadPrompt";
 import AppRoutes from "./routes/AppRoutes";
-
+import OfflineIndicator from "./components/PWA/OfflineIndicator";
 function App() {
   const dispatch = useAppDispatch();
 
-  const { token, isAuthenticated, initialized } = useAppSelector(
-    (state) => state.auth,
-  );
+  const { token, isAuthenticated, initialized } = useAppSelector((state) => state.auth);
 
   /**
    * Restore authentication
@@ -41,7 +36,13 @@ function App() {
     }
   }, [initialized, isAuthenticated, token]);
 
-  return <AppRoutes />;
+  return (
+    <>
+      <OfflineIndicator />
+      <ReloadPrompt />
+      <AppRoutes />
+    </>
+  );
 }
 
 export default App;
