@@ -1,4 +1,4 @@
-import { Button, Empty, Input, List, message, Modal, Spin } from "antd";
+import { Button, Empty, Input, List, Modal, Spin } from "antd";
 
 import { useCallback, useEffect, useState } from "react";
 
@@ -227,7 +227,6 @@ const Chat = () => {
             }
           } else {
             setMessages((prev) => prev.filter((msg) => msg._id !== clientMessageId));
-            message.error("Failed to send message");
           }
         },
       );
@@ -398,7 +397,7 @@ const Chat = () => {
 
       socket.off("message_read", handleMessageRead);
     };
-  }, [selectedConversation?._id, user?.id, typingUserId, loadConversations]);
+  }, [selectedConversation?._id, user?.id, typingUserId]);
   // Load messages from API or cache
   useEffect(() => {
     const fetchMessages = async () => {
